@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/libnetwork/config"
 	"github.com/docker/libnetwork/datastore"
@@ -704,7 +705,11 @@ func (n *network) processOptions(options ...NetworkOption) {
 	}
 }
 
-func (n *network) resolveDriver(name string, load bool) (driverapi.Driver, *driverapi.Capability, error) {
+func (n *network) createDriver(name string, load bool) (driverapi.Driver, *driverapi.Capability, error) {
+	return n.resolveDriver(name, load, plugingetter.CREATE)
+}
+
+func (n *network) resolveDriver(name string, load bool, mode int) (driverapi.Driver, *driverapi.Capability, error) {
 	c := n.getController()
 
 	// Check if a driver for the specified network type is available
@@ -712,7 +717,7 @@ func (n *network) resolveDriver(name string, load bool) (driverapi.Driver, *driv
 	if d == nil {
 		if load {
 			var err error
-			err = c.loadDriver(name)
+			err = c.loadDriver(name, mode)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -725,13 +730,20 @@ func (n *network) resolveDriver(name string, load bool) (driverapi.Driver, *driv
 			// don't fail if driver loading is not required
 			return nil, nil, nil
 		}
+	} else {
+		// Call loadDriver even if the driver is already loaded.
+		// this is so that we refcount properly.
+		// resolveDriver() is called on create and delete network.
+		if err := c.loadDriver(name, mode); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return d, cap, nil
 }
 
 func (n *network) driverScope() string {
-	_, cap, err := n.resolveDriver(n.networkType, true)
+	_, cap, err := n.resolveDriver(n.networkType, true, plugingetter.LOOKUP)
 	if err != nil {
 		// If driver could not be resolved simply return an empty string
 		return ""
@@ -740,8 +752,31 @@ func (n *network) driverScope() string {
 	return cap.DataScope
 }
 
+func (n *network) deleteDriver(load bool) (driverapi.Driver, error) {
+	d, cap, err := n.resolveDriver(n.networkType, load, plugingetter.REMOVE)
+	if err != nil {
+		return nil, err
+	}
+
+	c := n.getController()
+	isAgent := c.isAgent()
+	n.Lock()
+	// If load is not required, driver, cap and err may all be nil
+	if cap != nil {
+		n.scope = cap.DataScope
+	}
+	if isAgent || n.dynamic {
+		// If we are running in agent mode then all networks
+		// in libnetwork are local scope regardless of the
+		// backing driver.
+		n.scope = datastore.LocalScope
+	}
+	n.Unlock()
+	return d, nil
+}
+
 func (n *network) driver(load bool) (driverapi.Driver, error) {
-	d, cap, err := n.resolveDriver(n.networkType, load)
+	d, cap, err := n.resolveDriver(n.networkType, load, plugingetter.LOOKUP)
 	if err != nil {
 		return nil, err
 	}
@@ -832,7 +867,8 @@ func (n *network) delete(force bool) error {
 }
 
 func (n *network) deleteNetwork() error {
-	d, err := n.driver(true)
+	//d, err := n.driver(true)
+	d, err := n.deleteDriver(true)
 	if err != nil {
 		return fmt.Errorf("failed deleting network: %v", err)
 	}

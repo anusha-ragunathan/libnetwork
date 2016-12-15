@@ -657,7 +657,8 @@ func (c *controller) NewNetwork(networkType, name string, id string, options ...
 
 	network.processOptions(options...)
 
-	_, cap, err := network.resolveDriver(networkType, true)
+	//_, cap, err := network.resolveDriver(networkType, true)
+	_, cap, err := network.createDriver(networkType, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1069,11 +1070,13 @@ func SandboxKeyWalker(out *Sandbox, key string) SandboxWalker {
 	}
 }
 
-func (c *controller) loadDriver(networkType string) error {
+//func (c *controller) loadDriver(networkType string) error {
+func (c *controller) loadDriver(networkType string, mode int) error {
 	var err error
 
 	if pg := c.GetPluginGetter(); pg != nil {
-		_, err = pg.Get(networkType, driverapi.NetworkPluginEndpointType, plugingetter.LOOKUP)
+		//_, err = pg.Get(networkType, driverapi.NetworkPluginEndpointType, plugingetter.LOOKUP)
+		_, err = pg.Get(networkType, driverapi.NetworkPluginEndpointType, mode)
 	} else {
 		_, err = plugins.Get(networkType, driverapi.NetworkPluginEndpointType)
 	}
